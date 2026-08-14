@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "code-explain-video-mcp"
+version = "0.1.0"
+description = "MCP server that turns a codebase scope + a user goal into a rendered Remotion explainer video."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+
+# Dependencies are intentionally EMPTY here.
+# Runtime dependencies for this project are managed in requirements.txt, which is
+# owned outside of this package metadata. Do not add pins to this file; add them
+# to requirements.txt instead. This block exists only so the `src/` layout is
+# installable (`pip install -e .`) and so console scripts resolve.
+dependencies = []
+
+[project.optional-dependencies]
+# Same rule as above: dev/test pins live in requirements.txt (or a requirements-dev.txt).
+dev = []
+
+[project.scripts]
+code-explain-video-mcp = "code_explain_video_mcp.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/code_explain_video_mcp"]
+
+[tool.hatch.build.targets.wheel.force-include]
+# The Remotion scaffold is data, not Python, but it must ship with the package
+# because jobs copy it into a per-job workspace at runtime.
+"src/code_explain_video_mcp/remotion/scaffold" = "code_explain_video_mcp/remotion/scaffold"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["code_explain_video_mcp"]
+strict = true

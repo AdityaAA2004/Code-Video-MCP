@@ -1,0 +1,18 @@
+{
+  "$schema": "https://gofastmcp.com/public/schemas/fastmcp.json/v1.json",
+  "source": {
+    "type": "filesystem",
+    "path": "src/code_explain_video_mcp/server.py",
+    "entrypoint": "create_server"
+  },
+  "environment": {
+    "type": "uv",
+    "python": "3.12",
+    "requirements": "requirements.txt",
+    "editable": ["."]
+  },
+  "deployment": {
+    "transport": "stdio",
+    "log_level": "INFO"
+  }
+}

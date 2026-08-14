@@ -1,0 +1,29 @@
+# Code-Explanation Video MCP Server — direct dependencies
+#
+# Target runtime: Python 3.12  (fastmcp 4.x requires >=3.10)
+# Install:  python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
+#
+# Pins are exact so the environment is reproducible. To refresh a pin, bump it
+# here and re-run the install — do not add transitive packages to this file;
+# pip resolves those. Use `pip freeze > requirements-lock.txt` if you need a
+# full lock of the resolved tree.
+
+# --- MCP server + client -----------------------------------------------------
+# 4.0.0b3 is a pre-release, so `pip install -r` needs the exact pin below
+# (a bare `fastmcp` resolves to the 3.4.x stable line instead).
+# Pulls in fastmcp-slim[client,server], mcp, starlette, uvicorn, pydantic.
+fastmcp==4.0.0b3
+
+# --- Internal pipeline -------------------------------------------------------
+# LangGraph drives the resolve_scope -> ... -> render_video graph described in
+# base-architecture.md. Not exposed to the MCP host.
+langgraph==1.2.11
+
+# LLM calls for build_storyboard, generate_remotion_code, and fix_errors.
+anthropic==0.122.0
+
+# --- Known resolution note ---------------------------------------------------
+# langgraph (via langgraph-sdk) constrains websockets to <16, which downgrades
+# the 17.x that fastmcp would otherwise take. Verified compatible: `pip check`
+# is clean and both packages import fine at websockets 15.0.1. If you ever drop
+# langgraph, websockets is free to float back up to 17.x.

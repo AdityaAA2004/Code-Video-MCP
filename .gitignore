@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenv — recreate with: python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/
+venv/
+
+# Secrets — LLM API keys for the storyboard/codegen nodes
+.env
+.env.*
+!.env.example
+
+# Job working dirs: per-job scaffold copies, generated Remotion code, rendered MP4s
+/jobs_output/
+/tmp_jobs/
+*.mp4
+
+# Remotion / Node
+node_modules/
+.remotion/
+out/
+
+# macOS
+.DS_Store
