@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "code-explain-video": {
+      "command": ".venv/bin/python",
+      "args": ["-m", "code_explain_video_mcp"],
+      "env": {
+        "CODE_EXPLAIN_VIDEO_DRY_RUN": "1"
+      }
+    }
+  }
+}

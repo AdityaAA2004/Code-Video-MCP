@@ -25,12 +25,18 @@ added, it should become a mounted sub-server rather than more top-level tools.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Final
+
+from code_explain_video_mcp.logging_conf import configure_logging, get_logger
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from code_explain_video_mcp.config import Settings
+
+logger = get_logger("server")
 
 SERVER_NAME: Final[str] = "code-explain-video-mcp"
 
@@ -56,7 +62,67 @@ def create_server(settings: "Settings | None" = None) -> "FastMCP":
     6. Attach a lifespan that starts the optional static file server and
        cancels in-flight jobs plus reaps workspaces on shutdown.
     """
-    raise NotImplementedError
+    from fastmcp import FastMCP
+
+    from code_explain_video_mcp.config import load_settings
+    from code_explain_video_mcp.graph import PipelineDeps, compile_pipeline, recursion_limit_for
+    from code_explain_video_mcp.jobs import InMemoryJobStore, JobRunner, WorkspaceManager
+    from code_explain_video_mcp.tools import ToolDeps, register_tools
+
+    resolved = settings or load_settings()
+
+    # stdio_safe unconditionally: even under HTTP, writing logs to stdout gains
+    # nothing, and getting it wrong under stdio corrupts the JSON-RPC framing.
+    configure_logging("INFO", stdio_safe=True)
+
+    if resolved.jobs.store_backend != "memory":
+        raise NotImplementedError(
+            f"Job store backend {resolved.jobs.store_backend!r} is not implemented; "
+            "only 'memory' exists in v1."
+        )
+
+    store = InMemoryJobStore()
+    workspaces = WorkspaceManager(resolved.render)
+    workspaces.root.mkdir(parents=True, exist_ok=True)
+    resolved.render.output_root.mkdir(parents=True, exist_ok=True)
+
+    pipeline_deps = PipelineDeps(settings=resolved, store=store, workspaces=workspaces)
+    pipeline = compile_pipeline(pipeline_deps)
+
+    runner = JobRunner(
+        settings=resolved,
+        store=store,
+        workspaces=workspaces,
+        pipeline=pipeline,
+        recursion_limit=recursion_limit_for(pipeline_deps),
+    )
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: "FastMCP") -> AsyncIterator[None]:
+        """Reap stale workspaces on the way in; cancel live jobs on the way out."""
+        workspaces.reap(resolved.jobs.workspace_ttl_seconds, keep=runner.active_job_ids)
+        logger.info(
+            "%s ready — %d tools, dry_run=%s, workspaces at %s",
+            SERVER_NAME,
+            3,
+            resolved.dry_run,
+            workspaces.root,
+        )
+        try:
+            yield
+        finally:
+            await runner.shutdown()
+            await store.reap(resolved.jobs.workspace_ttl_seconds)
+            logger.info("%s shut down", SERVER_NAME)
+
+    mcp = FastMCP(
+        name=SERVER_NAME,
+        instructions=SERVER_INSTRUCTIONS,
+        version="0.1.0",
+        lifespan=lifespan,
+    )
+    register_tools(mcp, ToolDeps(settings=resolved, store=store, runner=runner))
+    return mcp
 
 
 def run(settings: "Settings | None" = None) -> None:
@@ -65,5 +131,31 @@ def run(settings: "Settings | None" = None) -> None:
     Note the spike's bug that this replaces: ``host``/``port`` are ignored
     unless ``transport="http"`` is passed explicitly, and ``host`` is a bind
     address (``127.0.0.1``), not a URL.
+
+    ``run()`` defaults to stdio and swallows ``host``/``port`` into
+    ``**transport_kwargs`` without raising, so a server that *looks* configured
+    for HTTP will sit silently on stdio while clients fail to connect. The fix
+    is to branch on the transport and only pass the network arguments when they
+    mean something.
     """
-    raise NotImplementedError
+    from code_explain_video_mcp.config import load_settings
+
+    resolved = settings or load_settings()
+    mcp = create_server(resolved)
+
+    if resolved.transport == "stdio":
+        # No banner: it would go to stdout and corrupt the protocol stream.
+        mcp.run(transport="stdio", show_banner=False)
+    else:
+        logger.info(
+            "serving over %s at http://%s:%d/mcp",
+            resolved.transport,
+            resolved.host,
+            resolved.port,
+        )
+        mcp.run(
+            transport=resolved.transport,
+            show_banner=False,
+            host=resolved.host,
+            port=resolved.port,
+        )

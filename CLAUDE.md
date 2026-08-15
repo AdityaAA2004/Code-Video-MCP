@@ -4,9 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-Pre-alpha spike. The entire codebase is [app.py](app.py) (a FastMCP server with one stub tool) and [app_client.py](app_client.py) (a script that calls it). [base-architecture.md](base-architecture.md) is the design doc for what this is meant to become — treat it as the spec, not as a description of existing code.
+Pre-alpha. The three MCP tools, the async job store, and the full LangGraph pipeline are wired and working end to end — but **the pipeline runs in dry-run mode**: every stage executes, logs, and reports real progress, while the stage *bodies* are placeholders. No LLM is called, no `tsc` runs, no video is rendered.
 
-There is no dependency manifest, test suite, lint config, git repo, or Remotion scaffold yet. When adding any of these, follow the layout in the architecture doc rather than inventing a new one.
+What is real: `resolve_scope` (a genuine bounded, ranked repo walk), the job lifecycle, stage progression, polling, the storyboard schema, and the validate/fix retry cap.
+
+What is a placeholder: `gather_context`, `build_storyboard`, `generate_remotion_code`, `validate_syntax`, `fix_errors`, `render_video`. Each raises `NotImplementedError` when `dry_run=False`, so a stage can never silently fake a result once the switch is off. Flip `Settings.dry_run` (or `CODE_EXPLAIN_VIDEO_DRY_RUN=0`) as each one lands.
+
+Still missing entirely: the Remotion scaffold (`remotion/scaffold/`), `llm/client.py` implementations, and the `delivery` package.
+
+[base-architecture.md](base-architecture.md) is the spec. Where the code and the doc disagree, the doc is the intent.
 
 ## Environment
 
@@ -31,12 +37,52 @@ Dependency rules ([requirements.txt](requirements.txt)):
 - `langgraph` constrains `websockets<16`, downgrading the 17.x FastMCP would otherwise take. This is verified compatible (`pip check` clean, both import fine at 15.0.1) — don't "fix" it.
 - `pandas-plink`, `genoml2`, `tensorflow`, and `protobuf` are **not** dependencies of this project. FastMCP 4.0.0b3 depends only on `fastmcp-slim`. Those are genomics/ML packages that were pasted in from an unrelated project and deliberately excluded.
 
-## Running the spike
+## Running it
+
+The server defaults to **stdio**, which is what Claude Code and Codex spawn:
 
 ```bash
-.venv/bin/python app.py        # terminal 1 — server on 127.0.0.1:8000
-.venv/bin/python app_client.py # terminal 2 — client, calls explain_code once
+.venv/bin/python -m code_explain_video_mcp          # stdio (host-facing)
+.venv/bin/python app.py                             # HTTP on 127.0.0.1:8000
 ```
+
+End-to-end exercise of all three tools (starts an in-process server, polls a job
+to completion, reads the storyboard mid-flight):
+
+```bash
+.venv/bin/python app_client.py
+.venv/bin/python app_client.py --scope src/code_explain_video_mcp/graph
+.venv/bin/python app_client.py --url http://127.0.0.1:8000/mcp   # against a running server
+```
+
+Tests:
+
+```bash
+.venv/bin/python -m pytest tests/ -q
+```
+
+Host registration: [.mcp.json](.mcp.json) for Claude Code; an
+`[mcp_servers.code_explain_video]` block in `~/.codex/config.toml` for Codex.
+
+## Settings
+
+`Settings` describes **the server process** — caps, model names, timeouts, paths.
+It is deliberately *not* per-codebase; the things that vary per repo (`root`,
+`scope`, `goal`) are tool arguments.
+
+Precedence, lowest to highest: `default_settings()` → an optional TOML file
+passed via `--config` → `CODE_EXPLAIN_VIDEO_*` env vars. **Nothing ever searches
+for a config file** — there is no `config.toml` convention and no directory scan.
+Defaults are complete and self-sufficient; the only two `None` fields
+(`jobs.sqlite_path`, `delivery.public_base_url`) gate features that are off.
+
+`root` resolution is the one genuinely fragile input, because a stdio server
+inherits its *host's* working directory. The ladder in `tools/elicitation.py`
+is: explicit `root` → configured `default_root` → cwd if it has repo markers →
+nearest enclosing repo root → **hard error**. It never falls back to "use cwd
+anyway". Leave `default_root` unset on a general-purpose server: it outranks the
+cwd rungs on every call, so pinning it would make "explain that other repo"
+silently explain the pinned one.
 
 Verified working end to end (client prints the stub explanation).
 

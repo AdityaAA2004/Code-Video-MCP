@@ -16,9 +16,10 @@ instructions to the model.
 
 from __future__ import annotations
 
+import math
 from typing import Final, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 STORYBOARD_SCHEMA_VERSION: Final[str] = "1.0"
 
@@ -84,12 +85,37 @@ class Storyboard(BaseModel):
     width: int = Field(default=1920, gt=0)
     height: int = Field(default=1080, gt=0)
 
+    # ``computed_field``, not a bare ``@property``: these two must appear in the
+    # serialized JSON. ``get_storyboard`` hands this model straight to the host,
+    # and a plain property is invisible there — the calling model would have to
+    # sum scene durations itself to answer "how long is the video?".
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def total_duration_seconds(self) -> float:
         """Sum of scene durations; the composition's length."""
-        raise NotImplementedError
+        return round(sum(scene.duration_seconds for scene in self.scenes), 3)
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def total_frames(self) -> int:
-        """``total_duration_seconds * fps``, rounded for Remotion's durationInFrames."""
-        raise NotImplementedError
+        """``total_duration_seconds * fps``, rounded for Remotion's durationInFrames.
+
+        Rounded *up*: Remotion truncates a composition at ``durationInFrames``,
+        so rounding down would clip the last scene's final frames.
+        """
+        return max(1, math.ceil(self.total_duration_seconds * self.fps))
+
+    def scene_frame_ranges(self) -> list[tuple[str, int, int]]:
+        """Return ``(scene_id, start_frame, duration_frames)`` for every scene.
+
+        This is the mapping ``generate_remotion_code`` needs to lay scenes out in
+        a ``<Series>`` — computing it here keeps the frame arithmetic in one
+        place instead of duplicated in the TSX template.
+        """
+        ranges: list[tuple[str, int, int]] = []
+        cursor = 0
+        for scene in self.scenes:
+            frames = max(1, math.ceil(scene.duration_seconds * self.fps))
+            ranges.append((scene.id, cursor, frames))
+            cursor += frames
+        return ranges

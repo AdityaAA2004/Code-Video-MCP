@@ -43,6 +43,16 @@ class StageNotReachedError(CodeExplainVideoError):
         self.stage = stage
 
 
+class RootResolutionError(CodeExplainVideoError):
+    """No usable repo root could be determined for a job.
+
+    Deliberately *not* a ``PipelineError``. This is caught at the tool boundary
+    before a job is created, so the caller gets an immediate, actionable error
+    telling it to pass ``root`` — rather than a ``job_id`` that fails a few
+    seconds later and only surfaces on the next poll.
+    """
+
+
 class PipelineError(CodeExplainVideoError):
     """Base for failures inside a graph node."""
 

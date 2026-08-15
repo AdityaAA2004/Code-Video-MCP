@@ -44,4 +44,12 @@ def register_tools(mcp: "FastMCP", deps: ToolDeps) -> None:
     Adding a fourth registration here is a design change, not a feature: the
     architecture explicitly caps the host-visible surface at three.
     """
-    raise NotImplementedError
+    from code_explain_video_mcp.tools import (
+        explain_codebase,
+        get_render_status,
+        get_storyboard,
+    )
+
+    explain_codebase.register(mcp, deps)
+    get_render_status.register(mcp, deps)
+    get_storyboard.register(mcp, deps)
