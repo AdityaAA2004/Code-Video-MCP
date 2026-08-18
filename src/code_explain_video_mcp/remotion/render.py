@@ -1,16 +1,14 @@
 """Shelling out to the Remotion CLI.
 
 The last pipeline stage and the only one measured in minutes, which is why the
-whole job store exists. Two properties this module must hold:
+job store exists. Two properties this module must hold:
 
 * the render runs against the *job workspace copy*, never the checked-in
   scaffold, so two concurrent jobs cannot corrupt each other;
 * the subprocess is killed on timeout or cancellation. An orphaned ``chromium``
   from a Remotion render will happily sit at 100% CPU forever.
 
-Not implemented yet — ``render_video`` is stage 7 of the build order, and the
-dry-run path in :mod:`code_explain_video_mcp.graph.nodes` stands in for it until
-the storyboard and codegen stages are real.
+Not implemented: ``graph.nodes`` stands in for this stage under ``dry_run``.
 """
 
 from __future__ import annotations
@@ -36,6 +34,21 @@ class RenderResult:
     warnings: list[str] = field(default_factory=list)
 
 
+async def ensure_dependencies_installed(
+    project_dir: Path, settings: RenderSettings
+) -> None:
+    """Run the package manager's install step in the job's project copy.
+
+    Separated from :func:`render_video` because it is the slow, cacheable half —
+    a future optimisation shares one ``node_modules`` across jobs instead of
+    installing per job.
+
+    Raises:
+        ExternalToolError: ``node``/``npx`` is not on PATH.
+    """
+    raise NotImplementedError
+
+
 async def render_video(
     project_dir: Path,
     output_path: Path,
@@ -49,19 +62,4 @@ async def render_video(
         RenderError: The CLI exited non-zero, timed out, or wrote no file.
         ExternalToolError: ``node``/``npx`` is not on PATH.
     """
-    raise NotImplementedError
-
-
-async def ensure_dependencies_installed(project_dir: Path, settings: RenderSettings) -> None:
-    """Run the package manager's install step in the job's project copy.
-
-    Separated from :func:`render_video` because it is the slow, cacheable half —
-    a future optimisation shares one ``node_modules`` across jobs instead of
-    installing per job.
-    """
-    raise NotImplementedError
-
-
-async def probe_remotion_available(settings: RenderSettings) -> bool:
-    """Cheap preflight so a missing toolchain fails at stage 1, not stage 7."""
     raise NotImplementedError

@@ -4,6 +4,8 @@ The architecture doc names the fields this must carry: ``scope``, ``goal``,
 ``context_chunks``, ``storyboard``, ``remotion_code``, ``validation_errors``,
 ``retry_count``, ``job_id``, ``status``. They are all here, plus the few pieces
 of plumbing (workspace, root, notes) that nodes need in order to do real work.
+The rendered video is *not* here: nodes publish it straight to the job store,
+which is what ``get_render_status`` reads.
 
 It is a ``TypedDict`` with ``total=False`` because LangGraph nodes return
 *partial* updates: a node returns only the keys it touched and LangGraph merges
@@ -42,6 +44,9 @@ class PipelineState(TypedDict, total=False):
     requested_scope: str | None
     """Raw scope string as the host gave it; ``None`` means whole repo."""
 
+    workspace: Any
+    """``jobs.workspace.Workspace`` for this job."""
+
     scope: Any
     """``context.scope.ResolvedScope`` — the bounded file list, after stage 1."""
 
@@ -60,20 +65,11 @@ class PipelineState(TypedDict, total=False):
     retry_count: int
     """How many times ``fix_errors`` has run. Capped by ``max_fix_retries``."""
 
-    workspace: Any
-    """``jobs.workspace.Workspace`` for this job."""
-
     stage: JobStage
     """The node currently executing; mirrored into the job store for polling."""
 
     status: str
     """``queued`` / ``running`` / ``succeeded`` / ``failed``."""
-
-    video_path: Path | None
-    """Set by stage 7 on success."""
-
-    video_url: str | None
-    """Set when delivery serves the artifact over HTTP."""
 
     error: str | None
     """Terminal failure message, shaped for the host to relay verbatim."""
@@ -113,8 +109,6 @@ def initial_state(
         retry_count=0,
         stage="queued",
         status="running",
-        video_path=None,
-        video_url=None,
         error=None,
         notes=list(notes or []),
         stage_log=[],

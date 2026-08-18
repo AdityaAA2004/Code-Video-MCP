@@ -1,66 +1,55 @@
-"""Runtime settings for the server.
+"""Runtime settings for the server process.
 
-Every hard ceiling the architecture doc calls for lives here as a named field
-rather than as a magic number buried in a node: the scope file/token caps that
-stop "whole repo" from blowing context, the capped retry count for the
-validate/fix loop, model names for the two LLM calls, and the filesystem roots
-for job workspaces and rendered output.
+Every hard ceiling the architecture calls for lives here as a named field rather
+than as a magic number buried in a node. Settings are built once at startup and
+threaded through explicitly (``create_server`` -> job runner -> graph nodes)
+instead of read from a module-level global, so tests can build a ``Settings``
+with tiny caps.
 
-Settings are read once at server startup and threaded through explicitly
-(``create_server`` -> job runner -> graph state config) rather than read from a
-module-level global, so tests can construct a ``Settings`` with tiny caps.
+Precedence, lowest to highest: :func:`default_settings`, an optional TOML file
+passed to :func:`load_settings`, then ``CODE_EXPLAIN_VIDEO_*`` env vars. Nothing
+ever searches for a config file.
 """
 
 from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, field, replace
+from collections.abc import Iterator
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
-from typing import Any, Literal, get_args
+from types import UnionType
+from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
 from code_explain_video_mcp.errors import ConfigurationError
 
 Transport = Literal["stdio", "http", "sse"]
 
 ENV_PREFIX = "CODE_EXPLAIN_VIDEO_"
-"""Prefix for the environment overrides applied last in :func:`load_settings`."""
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
+
+SECTIONS = ("scope", "llm", "render", "jobs", "delivery")
+"""Nested settings groups; also the table names in a TOML config file."""
 
 
 @dataclass(frozen=True, slots=True)
 class ScopeSettings:
-    """Ceilings applied by ``resolve_scope`` and ``gather_context``."""
+    """Ceilings and exclusions applied by ``resolve_scope``."""
 
     max_files: int
-    """Hard cap on files considered after ranking, for whole-repo scopes."""
-
     max_total_bytes: int
-    """Hard cap on bytes read across all selected files."""
-
-    max_context_tokens: int
-    """Approximate token budget for ``context_chunks`` handed to the LLM."""
-
     excluded_dir_names: frozenset[str]
-    """Directory names pruned during the walk (node_modules, .git, dist, ...)."""
-
     excluded_glob_patterns: tuple[str, ...]
-    """Path globs pruned during the walk (lockfiles, minified bundles, ...)."""
-
     ranking_strategy: Literal["size", "import_centrality", "hybrid"]
-    """How the top-N files are chosen when a repo exceeds ``max_files``."""
 
 
 @dataclass(frozen=True, slots=True)
 class LLMSettings:
-    """Model selection for the two generative nodes and the repair node."""
+    """Model selection for the generative nodes."""
 
     storyboard_model: str
     codegen_model: str
-    fix_model: str
-    max_output_tokens: int
-    temperature: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,21 +57,13 @@ class RenderSettings:
     """Everything about turning generated TSX into an MP4."""
 
     scaffold_dir: Path
-    """Source of the checked-in Remotion project copied per job."""
+    """The checked-in Remotion project, copied into each job's workspace."""
 
     workspace_root: Path
-    """Parent dir under which each job gets its own working directory."""
-
     output_root: Path
-    """Where finished MP4s land (may be served over HTTP)."""
-
     composition_id: str
-    """Remotion composition id passed to ``npx remotion render``."""
+    """Composition passed to ``npx remotion render``."""
 
-    node_binary: str
-    package_manager: Literal["npm", "pnpm", "yarn", "bun"]
-    typecheck_timeout_seconds: float
-    render_timeout_seconds: float
     max_fix_retries: int
     """Cap for the validate_syntax <-> fix_errors loop before failing the job."""
 
@@ -92,7 +73,6 @@ class JobSettings:
     """Async job store and lifecycle policy."""
 
     store_backend: Literal["memory", "sqlite"]
-    sqlite_path: Path | None
     max_concurrent_jobs: int
     workspace_ttl_seconds: float
     """How long a completed job's workspace survives before cleanup."""
@@ -120,39 +100,29 @@ class Settings:
     render: RenderSettings
     jobs: JobSettings
     delivery: DeliverySettings
+
     allow_elicitation: bool = True
     """Master switch; per-call support is still probed, never assumed."""
 
     default_root: Path | None = None
     """Repo root to use when a caller omits ``root``.
 
-    This exists because a stdio server inherits its *host's* working directory,
-    which is not reliably the repo the user is asking about. Setting
-    ``CODE_EXPLAIN_VIDEO_DEFAULT_ROOT`` pins it for a server dedicated to one
-    repository.
-
-    Leave it ``None`` for a general-purpose server. It outranks the cwd rungs of
-    :func:`~code_explain_video_mcp.tools.elicitation.resolve_root` and applies to
-    *every* call that omits ``root``, so pinning it on a shared server would make
-    "explain this other repo" silently explain the pinned one instead. With
-    ``None``, an unresolvable root is a loud error, which is the safer default.
+    Leave it ``None`` on a general-purpose server: it outranks the cwd rungs of
+    :func:`~code_explain_video_mcp.tools.elicitation.resolve_root` on *every*
+    call, so pinning it would make "explain that other repo" silently explain
+    the pinned one. With ``None``, an unresolvable root is a loud error.
     """
 
     dry_run: bool = True
     """Run the graph with placeholder stage bodies instead of real work.
 
     Every node still executes, logs, and advances the job store, so the whole
-    async job lifecycle — tool call, ``job_id``, polling, storyboard, terminal
-    status — is exercised end to end. What the nodes do *not* do is call an LLM,
-    run ``tsc``, or invoke the Remotion CLI.
-
-    It defaults to ``True`` because those stage bodies are not implemented yet;
-    flip it to ``False`` (or set ``CODE_EXPLAIN_VIDEO_DRY_RUN=0``) as each one
-    lands. A node with no real implementation raises ``NotImplementedError``
-    rather than silently producing a fake result when this is off.
+    async job lifecycle is exercised end to end — but no LLM is called, no
+    ``tsc`` runs, and no video is rendered. Defaults to ``True`` because those
+    stage bodies are not implemented yet; flip it to ``False`` (or set
+    ``CODE_EXPLAIN_VIDEO_DRY_RUN=0``) as each one lands. A node with no real
+    implementation raises ``NotImplementedError`` rather than faking a result.
     """
-
-    extra: dict[str, str] = field(default_factory=dict)
 
 
 DEFAULT_EXCLUDED_DIRS: frozenset[str] = frozenset(
@@ -172,26 +142,16 @@ DEFAULT_EXCLUDED_GLOBS: tuple[str, ...] = (
 )
 
 
-def _state_root() -> Path:
-    """Base directory for workspaces and rendered output.
-
-    Defaults under the user's cache dir rather than the repo so that generated
-    artifacts never end up staged into a user's git index by accident.
-    """
-    override = os.environ.get(f"{ENV_PREFIX}STATE_ROOT")
-    if override:
-        return Path(override).expanduser().resolve()
-    return Path.home() / ".cache" / "code-explain-video-mcp"
-
-
 def default_settings() -> Settings:
-    """Return the built-in defaults used when no config file/env is present.
+    """Return the built-in defaults used when no config file or env var is set.
 
     The caps are deliberately concrete: ``resolve_scope`` refuses to be
-    best-effort, so "whole repo" is bounded here at 60 files / 2 MiB / ~120k
-    tokens rather than at the call site.
+    best-effort, so "whole repo" is bounded here at 60 files / 2 MiB rather than
+    at the call site.
     """
-    state = _state_root()
+    # Under the user's cache dir, not the repo, so generated artifacts never end
+    # up staged into a git index by accident.
+    state = Path.home() / ".cache" / "code-explain-video-mcp"
     return Settings(
         transport="stdio",
         host="127.0.0.1",
@@ -199,7 +159,6 @@ def default_settings() -> Settings:
         scope=ScopeSettings(
             max_files=60,
             max_total_bytes=2 * 1024 * 1024,
-            max_context_tokens=120_000,
             excluded_dir_names=DEFAULT_EXCLUDED_DIRS,
             excluded_glob_patterns=DEFAULT_EXCLUDED_GLOBS,
             ranking_strategy="hybrid",
@@ -207,24 +166,16 @@ def default_settings() -> Settings:
         llm=LLMSettings(
             storyboard_model="claude-opus-5",
             codegen_model="claude-opus-5",
-            fix_model="claude-sonnet-5",
-            max_output_tokens=16_000,
-            temperature=0.2,
         ),
         render=RenderSettings(
             scaffold_dir=PACKAGE_ROOT / "remotion" / "scaffold",
             workspace_root=state / "workspaces",
             output_root=state / "output",
             composition_id="Explainer",
-            node_binary="node",
-            package_manager="npm",
-            typecheck_timeout_seconds=180.0,
-            render_timeout_seconds=1800.0,
             max_fix_retries=3,
         ),
         jobs=JobSettings(
             store_backend="memory",
-            sqlite_path=None,
             max_concurrent_jobs=2,
             workspace_ttl_seconds=24 * 3600.0,
         ),
@@ -237,101 +188,100 @@ def default_settings() -> Settings:
     )
 
 
-# Env var name -> (settings section or None for top level, field name, coercion).
-_ENV_FIELDS: dict[str, tuple[str | None, str, str]] = {
-    "TRANSPORT": (None, "transport", "transport"),
-    "HOST": (None, "host", "str"),
-    "PORT": (None, "port", "int"),
-    "ALLOW_ELICITATION": (None, "allow_elicitation", "bool"),
-    "DRY_RUN": (None, "dry_run", "bool"),
-    "DEFAULT_ROOT": (None, "default_root", "path"),
-    "SCOPE_MAX_FILES": ("scope", "max_files", "int"),
-    "SCOPE_MAX_TOTAL_BYTES": ("scope", "max_total_bytes", "int"),
-    "SCOPE_MAX_CONTEXT_TOKENS": ("scope", "max_context_tokens", "int"),
-    "LLM_STORYBOARD_MODEL": ("llm", "storyboard_model", "str"),
-    "LLM_CODEGEN_MODEL": ("llm", "codegen_model", "str"),
-    "LLM_FIX_MODEL": ("llm", "fix_model", "str"),
-    "RENDER_SCAFFOLD_DIR": ("render", "scaffold_dir", "path"),
-    "RENDER_WORKSPACE_ROOT": ("render", "workspace_root", "path"),
-    "RENDER_OUTPUT_ROOT": ("render", "output_root", "path"),
-    "RENDER_COMPOSITION_ID": ("render", "composition_id", "str"),
-    "RENDER_MAX_FIX_RETRIES": ("render", "max_fix_retries", "int"),
-    "RENDER_TIMEOUT_SECONDS": ("render", "render_timeout_seconds", "float"),
-    "JOBS_MAX_CONCURRENT": ("jobs", "max_concurrent_jobs", "int"),
-    "JOBS_WORKSPACE_TTL_SECONDS": ("jobs", "workspace_ttl_seconds", "float"),
-    "DELIVERY_SERVE_OVER_HTTP": ("delivery", "serve_over_http", "bool"),
-    "DELIVERY_STATIC_PORT": ("delivery", "static_port", "int"),
-    "DELIVERY_PUBLIC_BASE_URL": ("delivery", "public_base_url", "str"),
-}
+_SCALARS = (str, int, float, bool, Path)
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
-def _coerce(raw: object, kind: str, where: str) -> Any:
-    """Convert a TOML/env scalar into the type the dataclass field expects."""
+def _base_type(annotation: Any) -> Any:
+    """Unwrap ``X | None`` to ``X``; anything else is returned unchanged."""
+    if get_origin(annotation) in (Union, UnionType):
+        return next(arg for arg in get_args(annotation) if arg is not type(None))
+    return annotation
+
+
+def _overridable_fields(cls: type) -> Iterator[tuple[str, Any]]:
+    """Yield ``(name, type)`` for the fields a TOML key or env var may set.
+
+    Only scalars are overridable. The exclusion collections are settable in code
+    alone, which is why they are filtered out here.
+    """
+    hints = get_type_hints(cls)
+    for dataclass_field in fields(cls):
+        annotation = hints[dataclass_field.name]
+        if get_origin(annotation) is Literal or _base_type(annotation) in _SCALARS:
+            yield dataclass_field.name, annotation
+
+
+def _convert(raw: object, annotation: Any, where: str) -> Any:
+    """Turn a TOML value or env string into what the field's type declares."""
+    text = str(raw).strip()
+
+    if get_origin(annotation) is Literal:
+        allowed = get_args(annotation)
+        if text.lower() not in allowed:
+            raise ConfigurationError(f"{where} must be one of {allowed}, got {raw!r}")
+        return text.lower()
+
+    target = _base_type(annotation)
+    if target is bool:
+        return text.lower() in _TRUTHY
+    if target is Path:
+        return Path(text).expanduser()
     try:
-        if kind == "str":
-            return str(raw)
-        if kind == "int":
-            return int(raw)  # type: ignore[arg-type]
-        if kind == "float":
-            return float(raw)  # type: ignore[arg-type]
-        if kind == "path":
-            return Path(str(raw)).expanduser()
-        if kind == "bool":
-            if isinstance(raw, bool):
-                return raw
-            return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-        if kind == "transport":
-            value = str(raw).strip().lower()
-            if value not in get_args(Transport):
-                raise ValueError(f"must be one of {get_args(Transport)}")
-            return value
-    except (TypeError, ValueError) as exc:
-        raise ConfigurationError(f"Invalid value for {where}: {raw!r} ({exc})") from exc
-    raise ConfigurationError(f"Unknown coercion {kind!r} for {where}")
+        return target(text)
+    except ValueError as exc:
+        raise ConfigurationError(f"{where}: cannot read {raw!r} as {target.__name__}") from exc
 
 
-def _apply(settings: Settings, section: str | None, name: str, value: Any) -> Settings:
-    """Return a copy of ``settings`` with one (possibly nested) field replaced."""
-    if section is None:
-        return replace(settings, **{name: value})
-    nested = replace(getattr(settings, section), **{name: value})
-    return replace(settings, **{section: nested})
+def _env_var(section: str | None, name: str) -> str:
+    """Return the env var that overrides one field (``..._RENDER_MAX_FIX_RETRIES``)."""
+    parts = (name,) if section is None else (section, name)
+    return ENV_PREFIX + "_".join(parts).upper()
+
+
+def _read_toml(path: Path) -> dict[str, Any]:
+    """Parse a config file, turning every failure into a ``ConfigurationError``."""
+    path = Path(path).expanduser()
+    if not path.is_file():
+        raise ConfigurationError(f"Config file not found: {path}")
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigurationError(f"Could not read config {path}: {exc}") from exc
 
 
 def load_settings(config_path: Path | None = None) -> Settings:
     """Build ``Settings`` from defaults, an optional TOML file, and env vars.
 
-    Precedence (lowest to highest): ``default_settings()``, ``config_path``,
-    ``CODE_EXPLAIN_VIDEO_*`` environment variables.
-
-    The TOML file mirrors the dataclass layout — a top-level table per section
+    The TOML file mirrors the dataclass layout: one table per section
     (``[scope]``, ``[llm]``, ``[render]``, ``[jobs]``, ``[delivery]``) plus bare
     top-level keys for ``transport``/``host``/``port``.
 
     Raises:
-        ConfigurationError: ``config_path`` is missing/unparseable, or a value
-            cannot be coerced to its field's type.
+        ConfigurationError: ``config_path`` is missing or unparseable, or a
+            value cannot be read as its field's type.
     """
     settings = default_settings()
+    data = _read_toml(config_path) if config_path is not None else {}
 
-    if config_path is not None:
-        path = Path(config_path).expanduser()
-        if not path.is_file():
-            raise ConfigurationError(f"Config file not found: {path}")
-        try:
-            data = tomllib.loads(path.read_text(encoding="utf-8"))
-        except (OSError, tomllib.TOMLDecodeError) as exc:
-            raise ConfigurationError(f"Could not read config {path}: {exc}") from exc
-        for _env_name, (section, name, kind) in _ENV_FIELDS.items():
-            table = data if section is None else data.get(section, {})
-            if isinstance(table, dict) and name in table:
+    for section in (None, *SECTIONS):
+        group = settings if section is None else getattr(settings, section)
+        from_file = data if section is None else data.get(section)
+        table = from_file if isinstance(from_file, dict) else {}
+        updates: dict[str, Any] = {}
+
+        for name, annotation in _overridable_fields(type(group)):
+            env_var = _env_var(section, name)
+            raw = os.environ.get(env_var)
+            if raw:
+                updates[name] = _convert(raw, annotation, env_var)
+            elif name in table:
                 where = name if section is None else f"{section}.{name}"
-                settings = _apply(settings, section, name, _coerce(table[name], kind, where))
+                updates[name] = _convert(table[name], annotation, where)
 
-    for env_name, (section, name, kind) in _ENV_FIELDS.items():
-        raw = os.environ.get(f"{ENV_PREFIX}{env_name}")
-        if raw is not None and raw != "":
-            settings = _apply(settings, section, name, _coerce(raw, kind, ENV_PREFIX + env_name))
+        if updates:
+            updated = replace(group, **updates)
+            settings = updated if section is None else replace(settings, **{section: updated})
 
     if settings.render.max_fix_retries < 0:
         raise ConfigurationError("render.max_fix_retries must be >= 0")

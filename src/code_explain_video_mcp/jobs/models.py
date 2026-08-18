@@ -2,8 +2,8 @@
 
 The stage vocabulary lives here rather than in ``graph`` because two very
 different consumers need it: LangGraph node names, and the host-facing progress
-numbers reported by ``get_render_status``. Keeping one ordered tuple means the
-node names and the progress bar can never drift apart.
+numbers reported by ``get_render_status``. One ordered tuple means the node
+names and the progress bar can never drift apart.
 
 ``JobRecord`` is a mutable snapshot of one job. The store owns the locking; the
 record itself is a plain dataclass so the graph can update it cheaply between
@@ -13,9 +13,10 @@ nodes.
 from __future__ import annotations
 
 import time
+from copy import copy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Literal
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 
@@ -64,11 +65,11 @@ STAGE_LABELS: dict[JobStage, str] = {
 
 
 def stage_index(stage: JobStage) -> int:
-    """Return the 0-based index of ``stage`` in :data:`PIPELINE_STAGES`.
+    """0-based index of ``stage`` in :data:`PIPELINE_STAGES`.
 
     Stages outside the countable pipeline map to a sensible bound: ``queued`` to
     0, ``complete`` to :data:`TOTAL_STAGES`, and ``fix_errors`` to the index of
-    ``validate_syntax`` it is repairing.
+    the ``validate_syntax`` it is repairing.
     """
     if stage == "queued":
         return 0
@@ -123,9 +124,6 @@ class JobRecord:
     updated_at: float = field(default_factory=time.time)
     finished_at: float | None = None
 
-    stage_history: list[tuple[str, float]] = field(default_factory=list)
-    """``(stage, monotonic-ish timestamp)`` pairs, for the job log and debugging."""
-
     @property
     def is_terminal(self) -> bool:
         """Whether the job has stopped moving (succeeded, failed, or cancelled)."""
@@ -141,24 +139,15 @@ class JobRecord:
         self.updated_at = time.time()
 
     def enter_stage(self, stage: JobStage, message: str | None = None) -> None:
-        """Advance to ``stage``, recording it in the history."""
+        """Advance to ``stage``, starting the job if it was still queued."""
         self.stage = stage
         self.message = message if message is not None else STAGE_LABELS.get(stage)
-        self.stage_history.append((stage, time.time()))
         if self.status == "queued":
             self.status = "running"
         self.touch()
 
     def snapshot(self) -> "JobRecord":
-        """Return a shallow copy safe to hand to a reader outside the lock."""
-        from copy import copy
-
+        """A shallow copy safe to hand to a reader outside the lock."""
         clone = copy(self)
         clone.notes = list(self.notes)
-        clone.stage_history = list(self.stage_history)
         return clone
-
-
-def is_job_stage(value: str) -> bool:
-    """Whether ``value`` is a member of the :data:`JobStage` literal."""
-    return value in get_args(JobStage)

@@ -8,11 +8,21 @@ Pre-alpha. The three MCP tools, the async job store, and the full LangGraph pipe
 
 What is real: `resolve_scope` (a genuine bounded, ranked repo walk), the job lifecycle, stage progression, polling, the storyboard schema, and the validate/fix retry cap.
 
-What is a placeholder: `gather_context`, `build_storyboard`, `generate_remotion_code`, `validate_syntax`, `fix_errors`, `render_video`. Each raises `NotImplementedError` when `dry_run=False`, so a stage can never silently fake a result once the switch is off. Flip `Settings.dry_run` (or `CODE_EXPLAIN_VIDEO_DRY_RUN=0`) as each one lands.
+What is a placeholder: `gather_context`, `build_storyboard`, `generate_remotion_code`, `validate_syntax`, `fix_errors`, `render_video`. Each raises `NotImplementedError` when `dry_run=False`, so a stage can never silently fake a result once the switch is off.
+
+Every stage is built by one `_stage()` helper in `graph/nodes.py`, and a placeholder declares itself with a `needs=` argument naming the module it waits on:
+
+```python
+make_build_storyboard = _stage("build_storyboard", _build_storyboard, needs="llm.client")
+```
+
+`needs=` **is** the guard — landing a stage for real means deleting that one argument. Flip `Settings.dry_run` (or `CODE_EXPLAIN_VIDEO_DRY_RUN=0`) once no stage still declares one.
 
 Still missing entirely: the Remotion scaffold (`remotion/scaffold/`), `llm/client.py` implementations, and the `delivery` package.
 
-[base-architecture.md](base-architecture.md) is the spec. Where the code and the doc disagree, the doc is the intent.
+[base-architecture.md](base-architecture.md) is the spec for how the pipeline is built. Where the code and the doc disagree, the doc is the intent.
+
+[video-spec.md](video-spec.md) is the spec for **what the pipeline must produce** — the quality contract for the video itself. It is written to be embedded in the `build_storyboard` prompt, and it defines the failure mode ("documentation narration") that a naive storyboard generator falls into by default. `storyboard/validation.py` should grow the machine-checkable rules in its §9, and `storyboard/schema.py` needs the fields in its §10 before that spec is fully expressible.
 
 ## Environment
 
@@ -73,8 +83,15 @@ It is deliberately *not* per-codebase; the things that vary per repo (`root`,
 Precedence, lowest to highest: `default_settings()` → an optional TOML file
 passed via `--config` → `CODE_EXPLAIN_VIDEO_*` env vars. **Nothing ever searches
 for a config file** — there is no `config.toml` convention and no directory scan.
-Defaults are complete and self-sufficient; the only two `None` fields
-(`jobs.sqlite_path`, `delivery.public_base_url`) gate features that are off.
+Defaults are complete and self-sufficient; the one `None` field
+(`delivery.public_base_url`) gates a feature that is off. Env var names are
+*derived* from the dataclass field names, so a new field is overridable the
+moment it exists — `render.max_fix_retries` reads
+`CODE_EXPLAIN_VIDEO_RENDER_MAX_FIX_RETRIES` with no table to update.
+
+Config carries only fields something reads. Placeholder stages that will need
+settings (`node_binary`, timeouts, `temperature`) re-add them when they land,
+rather than sitting unread.
 
 `root` resolution is the one genuinely fragile input, because a stdio server
 inherits its *host's* working directory. The ladder in `tools/elicitation.py`

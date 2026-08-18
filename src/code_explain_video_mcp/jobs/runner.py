@@ -59,7 +59,7 @@ class JobRunner:
 
     @property
     def active_job_ids(self) -> set[str]:
-        """Ids of jobs whose task has not finished — used to protect workspaces from the reaper."""
+        """Jobs whose task has not finished — used to protect workspaces from the reaper."""
         return {job_id for job_id, task in self._tasks.items() if not task.done()}
 
     def start(self, record: JobRecord) -> None:
@@ -68,12 +68,15 @@ class JobRunner:
         Deliberately not ``async``: the tool that calls this must not be able to
         accidentally await the pipeline.
         """
-        if record.job_id in self._tasks:
-            raise ValueError(f"Job {record.job_id!r} is already running")
-        task = asyncio.create_task(self._execute(record), name=f"pipeline-{record.job_id}")
-        self._tasks[record.job_id] = task
-        task.add_done_callback(lambda t: self._tasks.pop(record.job_id, None))
-        logger.debug("scheduled pipeline task", extra={"job_id": record.job_id})
+        job_id = record.job_id
+        if job_id in self._tasks:
+            raise ValueError(f"Job {job_id!r} is already running")
+        task = asyncio.create_task(self._execute(record), name=f"pipeline-{job_id}")
+        self._tasks[job_id] = task
+        # Capture the id, not ``record``: the callback outlives the job and
+        # would otherwise pin the whole record (storyboard included) in memory.
+        task.add_done_callback(lambda _: self._tasks.pop(job_id, None))
+        logger.debug("scheduled pipeline task", extra={"job_id": job_id})
 
     async def _execute(self, record: JobRecord) -> None:
         """Drive one job from queued to a terminal status. Never raises."""
@@ -158,16 +161,6 @@ class JobRunner:
             ),
         )
         logger.info("pipeline complete", extra={"job_id": job_id})
-
-    async def cancel(self, job_id: str) -> bool:
-        """Cancel one running job. Returns whether there was anything to cancel."""
-        task = self._tasks.get(job_id)
-        if task is None or task.done():
-            return False
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        return True
 
     async def shutdown(self, *, timeout: float = 10.0) -> None:
         """Cancel every in-flight job and wait briefly for the tasks to unwind.

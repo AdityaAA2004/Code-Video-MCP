@@ -11,6 +11,8 @@ Two paths, and the order matters:
 
 Preferring (1) and falling back to (2) keeps the surface exposed to LLM error as
 small as possible, which is also what makes the capped repair loop tractable.
+
+Not implemented: ``graph.nodes`` stands in for this stage under ``dry_run``.
 """
 
 from __future__ import annotations
@@ -43,31 +45,21 @@ class GeneratedCode:
     """``deterministic`` or ``llm``; recorded so failures can be attributed."""
 
 
-def serialize_storyboard_props(storyboard: Storyboard) -> str:
-    """Render the storyboard as the JSON props file the scaffold reads.
-
-    The deterministic path — no model involved, so no syntax errors possible.
-    """
-    raise NotImplementedError
-
-
-async def generate_scene_code(
+async def generate_code(
     storyboard: Storyboard,
     manifest: ScaffoldManifest,
     client: "LLMClient",
     settings: "LLMSettings",
 ) -> GeneratedCode:
-    """Ask the model to fill the scaffold's slots for this storyboard.
+    """Fill the scaffold's slots for this storyboard.
+
+    Serialises the storyboard into the deterministic props slot, and asks the
+    model only for what the fixed components cannot express.
 
     Raises:
         CodeGenerationError: Output is missing slots, missing required exports,
             or tries to write outside the declared slots.
     """
-    raise NotImplementedError
-
-
-def extract_slot_files(raw_output: str, manifest: ScaffoldManifest) -> dict[str, str]:
-    """Parse fenced/tagged model output into ``{relative_path: contents}``."""
     raise NotImplementedError
 
 

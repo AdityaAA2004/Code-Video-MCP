@@ -5,10 +5,6 @@
 background task. That is three concurrent accessors on one object, so every
 read and write goes through an :class:`asyncio.Lock` and readers get a snapshot
 copy rather than a live reference.
-
-Only the in-memory backend exists today, which is what the architecture doc
-calls for in v1. :class:`JobStore` is a Protocol so a SQLite-backed store can be
-dropped in later without touching the tools.
 """
 
 from __future__ import annotations
@@ -17,7 +13,6 @@ import asyncio
 import time
 import uuid
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
 from code_explain_video_mcp.errors import JobNotFoundError
 from code_explain_video_mcp.jobs.models import JobRecord, JobStage, JobStatus
@@ -36,34 +31,6 @@ def new_job_id() -> str:
     return f"job_{uuid.uuid4().hex[:12]}"
 
 
-@runtime_checkable
-class JobStore(Protocol):
-    """The contract the tools and the runner depend on."""
-
-    async def create(self, record: JobRecord) -> JobRecord: ...
-
-    async def get(self, job_id: str) -> JobRecord: ...
-
-    async def update(self, job_id: str, **fields: object) -> JobRecord: ...
-
-    async def enter_stage(
-        self, job_id: str, stage: JobStage, message: str | None = None
-    ) -> JobRecord: ...
-
-    async def finish(
-        self,
-        job_id: str,
-        status: JobStatus,
-        *,
-        error: str | None = None,
-        message: str | None = None,
-    ) -> JobRecord: ...
-
-    async def list_ids(self) -> list[str]: ...
-
-    async def reap(self, ttl_seconds: float) -> list[str]: ...
-
-
 class InMemoryJobStore:
     """Dict-backed store. Jobs do not survive a server restart, by design.
 
@@ -75,6 +42,17 @@ class InMemoryJobStore:
     def __init__(self) -> None:
         self._records: dict[str, JobRecord] = {}
         self._lock = asyncio.Lock()
+
+    def _require(self, job_id: str) -> JobRecord:
+        """Look up a live record. Callers must already hold ``self._lock``.
+
+        Raises:
+            JobNotFoundError: Unknown id, or the record was reaped by TTL.
+        """
+        record = self._records.get(job_id)
+        if record is None:
+            raise JobNotFoundError(job_id)
+        return record
 
     async def create(self, record: JobRecord) -> JobRecord:
         """Insert a new record and return its snapshot."""
@@ -91,23 +69,14 @@ class InMemoryJobStore:
             return record.snapshot()
 
     async def get(self, job_id: str) -> JobRecord:
-        """Return a snapshot of ``job_id``.
-
-        Raises:
-            JobNotFoundError: Unknown id, or the record was reaped by TTL.
-        """
+        """Return a snapshot of ``job_id``."""
         async with self._lock:
-            record = self._records.get(job_id)
-            if record is None:
-                raise JobNotFoundError(job_id)
-            return record.snapshot()
+            return self._require(job_id).snapshot()
 
     async def update(self, job_id: str, **fields: object) -> JobRecord:
         """Set arbitrary fields on a record under the lock."""
         async with self._lock:
-            record = self._records.get(job_id)
-            if record is None:
-                raise JobNotFoundError(job_id)
+            record = self._require(job_id)
             for name, value in fields.items():
                 if not hasattr(record, name):
                     raise AttributeError(f"JobRecord has no field {name!r}")
@@ -120,15 +89,10 @@ class InMemoryJobStore:
     ) -> JobRecord:
         """Advance a job to ``stage`` and log the transition."""
         async with self._lock:
-            record = self._records.get(job_id)
-            if record is None:
-                raise JobNotFoundError(job_id)
+            record = self._require(job_id)
             record.enter_stage(stage, message)
             logger.info(
-                "stage -> %-24s %s",
-                stage,
-                record.message or "",
-                extra={"job_id": job_id},
+                "stage -> %-24s %s", stage, record.message or "", extra={"job_id": job_id}
             )
             return record.snapshot()
 
@@ -146,9 +110,7 @@ class InMemoryJobStore:
         racing a natural completion cannot rewrite the outcome.
         """
         async with self._lock:
-            record = self._records.get(job_id)
-            if record is None:
-                raise JobNotFoundError(job_id)
+            record = self._require(job_id)
             if record.is_terminal:
                 return record.snapshot()
             record.status = status
@@ -166,16 +128,6 @@ class InMemoryJobStore:
                 extra={"job_id": job_id},
             )
             return record.snapshot()
-
-    async def list_ids(self) -> list[str]:
-        """Return every known job id, newest first."""
-        async with self._lock:
-            return [
-                r.job_id
-                for r in sorted(
-                    self._records.values(), key=lambda r: r.created_at, reverse=True
-                )
-            ]
 
     async def reap(self, ttl_seconds: float) -> list[str]:
         """Drop terminal records older than ``ttl_seconds``; return their ids.
@@ -197,6 +149,15 @@ class InMemoryJobStore:
         if expired:
             logger.info("reaped %d expired job record(s)", len(expired))
         return expired
+
+
+JobStore = InMemoryJobStore
+"""The type call sites annotate against.
+
+An alias rather than a Protocol: there is exactly one implementation, and the
+Protocol was a second copy of every signature above. If a persistent backend
+ever lands, turn this name back into a Protocol and no caller changes.
+"""
 
 
 def build_job_record(

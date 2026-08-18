@@ -1,9 +1,9 @@
-"""Pydantic models for the three tools' inputs and outputs.
+"""Pydantic models for the three tools' responses.
 
-These are the contract the host sees. FastMCP derives both the input JSON Schema
-and the structured output schema from these annotations, so field names,
-docstrings, and ``Field`` descriptions here are prompt surface for the calling
-model — they are worth wording carefully.
+These are the contract the host sees: FastMCP derives the structured output
+schema from them, so field names and ``Field`` descriptions here are prompt
+surface for the calling model and are worth wording carefully. Tool *inputs*
+need no models — FastMCP reads them off each tool's signature.
 
 Kept separate from the tool bodies so tests can assert on the wire shape without
 constructing a server.
@@ -19,27 +19,6 @@ from code_explain_video_mcp.jobs.models import JobStage, JobStatus
 from code_explain_video_mcp.storyboard.schema import Storyboard
 
 ScopeMode = Literal["explicit", "attached_context", "whole_repo"]
-
-
-class ExplainCodebaseInput(BaseModel):
-    """Arguments for ``explain_codebase``."""
-
-    scope: str | None = Field(
-        default=None,
-        description=(
-            "Path or glob to explain, relative to the repo root. Omit to let the "
-            "server ask (when the client supports elicitation) or fall back to "
-            "attached context, then the whole repo."
-        ),
-    )
-    goal: str | None = Field(
-        default=None,
-        description="What the viewer wants to understand. Shapes every scene.",
-    )
-    root: str | None = Field(
-        default=None,
-        description="Repo root to resolve `scope` against. Defaults to the server's cwd.",
-    )
 
 
 class ExplainCodebaseResult(BaseModel):
@@ -61,12 +40,6 @@ class ExplainCodebaseResult(BaseModel):
         default_factory=list,
         description="Caveats, e.g. that scope was defaulted or files were truncated by the cap.",
     )
-
-
-class JobIdInput(BaseModel):
-    """Shared input for both polling tools."""
-
-    job_id: str = Field(description="Job id returned by explain_codebase.")
 
 
 class RenderArtifact(BaseModel):

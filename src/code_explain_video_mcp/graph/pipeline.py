@@ -12,6 +12,9 @@ Making "gave up" a *node* rather than an exception is deliberate: the retry cap
 is a designed outcome of the pipeline, so it should be visible in the topology
 where someone reading the graph will find it.
 
+Node names are the stage names from ``jobs.models.JobStage``, so the progress a
+host polls and the graph it would draw use the same vocabulary.
+
 Compilation happens once per server, not once per job — the graph is stateless
 and every job supplies its own state object.
 """
@@ -41,48 +44,35 @@ if TYPE_CHECKING:
 
 logger = get_logger("graph.pipeline")
 
-NODE_RESOLVE_SCOPE = "resolve_scope"
-NODE_GATHER_CONTEXT = "gather_context"
-NODE_BUILD_STORYBOARD = "build_storyboard"
-NODE_GENERATE_CODE = "generate_remotion_code"
-NODE_VALIDATE = "validate_syntax"
-NODE_FIX = "fix_errors"
-NODE_GIVE_UP = "give_up"
-NODE_RENDER = "render_video"
-
 
 def build_graph(deps: "PipelineDeps") -> StateGraph:
     """Assemble the uncompiled graph over ``deps``."""
     graph: StateGraph = StateGraph(PipelineState)
 
-    graph.add_node(NODE_RESOLVE_SCOPE, make_resolve_scope(deps))
-    graph.add_node(NODE_GATHER_CONTEXT, make_gather_context(deps))
-    graph.add_node(NODE_BUILD_STORYBOARD, make_build_storyboard(deps))
-    graph.add_node(NODE_GENERATE_CODE, make_generate_remotion_code(deps))
-    graph.add_node(NODE_VALIDATE, make_validate_syntax(deps))
-    graph.add_node(NODE_FIX, make_fix_errors(deps))
-    graph.add_node(NODE_GIVE_UP, make_give_up(deps))
-    graph.add_node(NODE_RENDER, make_render_video(deps))
+    graph.add_node("resolve_scope", make_resolve_scope(deps))
+    graph.add_node("gather_context", make_gather_context(deps))
+    graph.add_node("build_storyboard", make_build_storyboard(deps))
+    graph.add_node("generate_remotion_code", make_generate_remotion_code(deps))
+    graph.add_node("validate_syntax", make_validate_syntax(deps))
+    graph.add_node("fix_errors", make_fix_errors(deps))
+    graph.add_node("give_up", make_give_up(deps))
+    graph.add_node("render_video", make_render_video(deps))
 
-    graph.add_edge(START, NODE_RESOLVE_SCOPE)
-    graph.add_edge(NODE_RESOLVE_SCOPE, NODE_GATHER_CONTEXT)
-    graph.add_edge(NODE_GATHER_CONTEXT, NODE_BUILD_STORYBOARD)
-    graph.add_edge(NODE_BUILD_STORYBOARD, NODE_GENERATE_CODE)
-    graph.add_edge(NODE_GENERATE_CODE, NODE_VALIDATE)
+    graph.add_edge(START, "resolve_scope")
+    graph.add_edge("resolve_scope", "gather_context")
+    graph.add_edge("gather_context", "build_storyboard")
+    graph.add_edge("build_storyboard", "generate_remotion_code")
+    graph.add_edge("generate_remotion_code", "validate_syntax")
 
     graph.add_conditional_edges(
-        NODE_VALIDATE,
+        "validate_syntax",
         make_should_fix(deps),
-        {
-            "fix": NODE_FIX,
-            "render": NODE_RENDER,
-            "give_up": NODE_GIVE_UP,
-        },
+        {"fix": "fix_errors", "render": "render_video", "give_up": "give_up"},
     )
 
-    graph.add_edge(NODE_FIX, NODE_VALIDATE)
-    graph.add_edge(NODE_GIVE_UP, END)
-    graph.add_edge(NODE_RENDER, END)
+    graph.add_edge("fix_errors", "validate_syntax")
+    graph.add_edge("give_up", END)
+    graph.add_edge("render_video", END)
     return graph
 
 

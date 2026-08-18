@@ -4,9 +4,8 @@
 which is what keeps large repos inside the token budget. Shelling out to ``rg``
 is much faster than walking in Python and already respects ``.gitignore``.
 
-The wrapper degrades rather than fails: if ``rg`` is not installed,
-:func:`ripgrep` falls back to a slower pure-Python scan so the server still
-works on a machine without it.
+Both functions below are placeholders. See ``graph.nodes.make_gather_context``
+for the dry-run stand-in that runs until they land.
 """
 
 from __future__ import annotations
@@ -26,11 +25,6 @@ class SearchHit:
     after: list[str]
 
 
-def ripgrep_available() -> bool:
-    """Whether an ``rg`` binary is on PATH."""
-    raise NotImplementedError
-
-
 async def ripgrep(
     pattern: str,
     paths: list[Path],
@@ -41,19 +35,10 @@ async def ripgrep(
 ) -> list[SearchHit]:
     """Run ripgrep and parse its JSON output into hits.
 
-    Falls back to :func:`python_scan` when ``rg`` is unavailable.
+    Must degrade rather than fail: when no ``rg`` binary is on PATH, fall back
+    to an equivalent pure-Python scan so the server still works on a machine
+    without it.
     """
-    raise NotImplementedError
-
-
-async def python_scan(
-    pattern: str,
-    paths: list[Path],
-    *,
-    context_lines: int = 3,
-    max_hits: int = 200,
-) -> list[SearchHit]:
-    """Pure-Python fallback with the same contract as :func:`ripgrep`."""
     raise NotImplementedError
 
 

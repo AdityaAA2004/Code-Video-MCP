@@ -1,9 +1,9 @@
 """Prompt construction for the three generative stages.
 
-Prompts live here, apart from the nodes, for two reasons: they are the part most
-likely to be iterated on, and they are worth testing directly (assert that the
-goal appears, that the scaffold's slot list is enumerated, that error text is
-included in the repair prompt).
+Prompts live here, apart from the nodes, because they are the part most likely
+to be iterated on and they are worth testing directly: assert that the goal
+appears, that the scaffold's slot list is enumerated, that error text reaches
+the repair prompt.
 
 The codegen prompt is the load-bearing one. Reliability comes from the scaffold:
 the model is shown the existing components and their prop types and asked to
@@ -18,20 +18,20 @@ from code_explain_video_mcp.remotion.manifest import ScaffoldManifest
 from code_explain_video_mcp.remotion.validate import ValidationIssue
 from code_explain_video_mcp.storyboard.schema import Storyboard
 
-STORYBOARD_SYSTEM_PROMPT: str = (
+STORYBOARD_SYSTEM_PROMPT = (
     "You plan short code-explainer videos. You are given real source code and a "
     "viewer goal. Every scene must earn its screen time against that goal, and "
     "every code snippet must quote the provided source verbatim with correct "
     "line numbers. Never invent code that was not given to you."
 )
 
-CODEGEN_SYSTEM_PROMPT: str = (
+CODEGEN_SYSTEM_PROMPT = (
     "You fill slots in an existing Remotion (React + TypeScript) project. The "
     "components, their props, and the composition shell already exist and must "
     "not be rewritten. Emit only the contents of the named slot files."
 )
 
-FIX_SYSTEM_PROMPT: str = (
+FIX_SYSTEM_PROMPT = (
     "You repair TypeScript compile and lint errors in generated Remotion scene "
     "code. Make the smallest change that clears the reported errors. Do not "
     "restructure working code and do not change the scaffold's component APIs."
@@ -67,7 +67,7 @@ def build_fix_prompt(
     """Assemble the repair prompt for stage 6.
 
     ``attempt``/``max_attempts`` are included deliberately: on the final attempt
-    the prompt instructs the model to prefer removing the offending scene over
-    an ambitious fix, so the job degrades to a shorter video instead of failing.
+    the prompt tells the model to prefer dropping the offending scene over an
+    ambitious fix, so the job degrades to a shorter video instead of failing.
     """
     raise NotImplementedError

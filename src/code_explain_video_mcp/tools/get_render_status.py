@@ -1,13 +1,10 @@
 """Tool 2 of 3: ``get_render_status`` — poll a job.
 
-Pure read against the job store. It never advances the pipeline and never
-blocks waiting for a stage; a caller that polls in a tight loop should get a
-cheap answer every time.
-
-On success it returns the artifact as a local path and/or a served URL, because
-no host can play video inline. On failure it returns the failing stage and a
-message the model can relay verbatim — including the "hit the retry cap"
-message from the validate/fix loop.
+A pure read against the job store: it never advances the pipeline and never
+blocks on a stage, so a tight polling loop stays cheap. On success it returns
+the artifact as a local path and/or a served URL, because no host can play video
+inline; on failure it returns the failing stage and a message the model can
+relay verbatim.
 """
 
 from __future__ import annotations
@@ -22,22 +19,11 @@ from code_explain_video_mcp.jobs.models import (
 )
 from code_explain_video_mcp.tools.schemas import RenderArtifact, RenderStatusResult
 
-# Runtime import: see the note in ``explain_codebase`` — FastMCP evaluates tool
-# annotations at registration time.
-from fastmcp import Context
-
 if TYPE_CHECKING:
-    from fastmcp import FastMCP
+    from fastmcp import Context
 
     from code_explain_video_mcp.jobs.models import JobRecord
     from code_explain_video_mcp.tools import ToolDeps
-
-TOOL_NAME = "get_render_status"
-
-TOOL_DESCRIPTION = (
-    "Check progress of an explainer video job. Returns the current stage, a "
-    "progress estimate, and the video path or URL once rendering completes."
-)
 
 
 def _artifact_for(record: "JobRecord", deps: "ToolDeps") -> RenderArtifact | None:
@@ -45,11 +31,10 @@ def _artifact_for(record: "JobRecord", deps: "ToolDeps") -> RenderArtifact | Non
     if record.video_path is None and record.video_url is None:
         return None
 
+    delivery = deps.settings.delivery
     url = record.video_url
-    if url is None and deps.settings.delivery.serve_over_http and record.video_path is not None:
-        base = deps.settings.delivery.public_base_url or (
-            f"http://{deps.settings.delivery.static_host}:{deps.settings.delivery.static_port}"
-        )
+    if url is None and delivery.serve_over_http and record.video_path is not None:
+        base = delivery.public_base_url or f"http://{delivery.static_host}:{delivery.static_port}"
         url = f"{base.rstrip('/')}/{record.job_id}/{record.video_path.name}"
 
     return RenderArtifact(
@@ -91,23 +76,4 @@ async def get_render_status(
         storyboard_available=record.storyboard_available,
         artifact=_artifact_for(record, deps),
         error=record.error,
-    )
-
-
-def register(mcp: "FastMCP", deps: "ToolDeps") -> None:
-    """Bind ``deps`` and register the tool as read-only (idempotent, no side effects)."""
-    from fastmcp.tools import Tool
-    from mcp.types import ToolAnnotations
-
-    async def tool(job_id: str, ctx: "Context | None" = None) -> RenderStatusResult:
-        return await get_render_status(deps, job_id=job_id, ctx=ctx)
-
-    tool.__doc__ = get_render_status.__doc__
-    mcp.add_tool(
-        Tool.from_function(
-            tool,
-            name=TOOL_NAME,
-            description=TOOL_DESCRIPTION,
-            annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True),
-        )
     )

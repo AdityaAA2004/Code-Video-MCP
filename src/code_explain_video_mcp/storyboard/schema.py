@@ -1,17 +1,11 @@
-"""The fixed storyboard JSON schema.
+"""The fixed storyboard JSON schema: scenes with a title, bullets, a code
+snippet and line refs, narration, a goal tie-in, and a duration.
 
-Per the architecture doc, a storyboard is a list of scenes, each with a title,
-bullet points, a code snippet with line references, narration text, an explicit
-tie-in to the user's goal, and an estimated duration.
-
-Two consumers depend on these exact field names:
-
-* ``generate_remotion_code``, which maps scenes onto scaffold components.
-* ``remotion/scaffold/src/types.ts``, the TypeScript mirror of these models.
-
-The JSON Schema derived from these models is also what constrains the LLM call
-in ``build_storyboard`` (structured output), so descriptions here double as
-instructions to the model.
+Two consumers depend on these exact field names — ``generate_remotion_code``,
+which maps scenes onto scaffold components, and ``remotion/scaffold/src/types.ts``,
+the TypeScript mirror of these models. The JSON Schema derived from them also
+constrains the ``build_storyboard`` LLM call, so the descriptions below double
+as instructions to the model.
 """
 
 from __future__ import annotations
@@ -30,9 +24,8 @@ TransitionKind = Literal["cut", "fade", "slide", "zoom"]
 class CodeSnippet(BaseModel):
     """A quoted region of a real file, with the refs needed to prove it is real.
 
-    ``start_line``/``end_line`` are 1-based and inclusive, and must correspond to
-    the file at ``path`` — ``validation.check_snippet_references`` enforces this
-    so the LLM cannot invent line numbers.
+    ``validation.check_snippet_references`` checks the range and text against
+    disk, so the LLM cannot invent line numbers.
     """
 
     path: str = Field(description="Repo-relative path of the source file.")
@@ -106,11 +99,10 @@ class Storyboard(BaseModel):
         return max(1, math.ceil(self.total_duration_seconds * self.fps))
 
     def scene_frame_ranges(self) -> list[tuple[str, int, int]]:
-        """Return ``(scene_id, start_frame, duration_frames)`` for every scene.
+        """``(scene_id, start_frame, duration_frames)`` per scene, for a ``<Series>``.
 
-        This is the mapping ``generate_remotion_code`` needs to lay scenes out in
-        a ``<Series>`` — computing it here keeps the frame arithmetic in one
-        place instead of duplicated in the TSX template.
+        Keeping the frame arithmetic here rather than in the TSX template means
+        ``generate_remotion_code`` never has to duplicate it.
         """
         ranges: list[tuple[str, int, int]] = []
         cursor = 0

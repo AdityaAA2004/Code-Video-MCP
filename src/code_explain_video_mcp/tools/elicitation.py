@@ -1,33 +1,25 @@
-"""Deciding what to explain when the host did not say.
+"""Deciding *which repo* and *which code* to explain when the host did not say.
 
-Client compatibility is a code concern here, not a docs concern. Elicitation
-works in Claude Code CLI, does not work in Claude Desktop, and is unconfirmed
-elsewhere — so every path through this module must terminate in a usable scope
-even when no question can be asked.
+Two independent ladders live here.
 
-The ladder, highest confidence first:
+:func:`resolve_root` picks the repository, and its last rung is a hard error.
+A stdio server inherits its *host's* working directory, so an omitted ``root``
+would otherwise mean "explain whatever directory Claude Code or Codex launched
+from" — silently producing a video about the wrong codebase. It never falls back
+to "use cwd anyway".
 
-1. ``scope`` argument given explicitly -> use it.
-2. Client supports elicitation -> ask "whole repo or a specific path?".
-3. Something is attached in the host's context -> use that.
-4. Nothing else -> whole repo, and set a note that MUST be surfaced to the user
-   verbatim so they know the server chose for them.
-
-FastMCP 4 has two elicitation mechanisms depending on the negotiated protocol
-era: ``await ctx.elicit(...)`` on handshake-era connections (<= 2025-11-25), and
-the return-and-resume guard pattern (return ``InputRequiredResult``, re-read
-``ctx.input_responses`` on the next call) on 2026-07-28+. Since neither is
-guaranteed, both are probed behind :func:`supports_elicitation` and both fall
-through to the same non-interactive default.
+:func:`resolve_requested_scope` picks the code within that repo, and never
+raises. Elicitation works in Claude Code CLI, does not work in Claude Desktop,
+and is unconfirmed elsewhere, so every rung falls through to a whole-repo
+default that announces itself in the notes.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from code_explain_video_mcp.context.scope import find_repo_root, looks_like_repo, repo_markers_at
 from code_explain_video_mcp.errors import RootResolutionError
 from code_explain_video_mcp.logging_conf import get_logger
 from code_explain_video_mcp.tools.schemas import ScopeMode
@@ -38,6 +30,60 @@ if TYPE_CHECKING:
 logger = get_logger("tools.elicitation")
 
 RootMode = Literal["explicit", "configured", "cwd", "cwd_ancestor"]
+
+VCS_MARKERS: frozenset[str] = frozenset({".git", ".hg", ".svn", ".jj"})
+"""Directories that identify a checkout root unambiguously."""
+
+PROJECT_MARKERS: frozenset[str] = frozenset(
+    {
+        "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
+        "package.json", "deno.json", "Cargo.toml", "go.mod", "pom.xml",
+        "build.gradle", "build.gradle.kts", "Gemfile", "composer.json",
+        "CMakeLists.txt", "mix.exs", "Package.swift",
+    }
+)
+"""Manifests that identify a project root when there is no VCS directory."""
+
+MAX_ROOT_WALK_DEPTH = 25
+"""Bound on the upward search, so a pathological path cannot spin."""
+
+
+def repo_markers_at(path: Path) -> list[str]:
+    """Return the VCS/manifest markers directly in ``path``; empty means "not a root"."""
+    try:
+        names = {entry.name for entry in path.iterdir()}
+    except (OSError, PermissionError):
+        return []
+    return sorted((names & VCS_MARKERS) | (names & PROJECT_MARKERS))
+
+
+def looks_like_repo(path: Path) -> bool:
+    """Whether ``path`` is plausibly the root of a codebase."""
+    return bool(repo_markers_at(path))
+
+
+def find_repo_root(start: Path) -> Path | None:
+    """Walk upward from ``start`` looking for a repo root; ``None`` if there is none.
+
+    The home directory and the filesystem root both stop the walk. A stray
+    ``package.json`` in ``$HOME`` must never turn "explain the whole repo" into
+    "walk the user's entire home directory".
+    """
+    try:
+        current = Path(start).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return None
+
+    home = Path.home().resolve()
+    for _ in range(MAX_ROOT_WALK_DEPTH):
+        if current == current.parent:  # filesystem root
+            return None
+        if current == home:  # check home itself, but never above it
+            return current if looks_like_repo(current) else None
+        if looks_like_repo(current):
+            return current
+        current = current.parent
+    return None
 
 WHOLE_REPO_CHOICE = "the whole repository"
 """Label for the whole-repo option; matched case-insensitively on the way back."""
@@ -50,51 +96,35 @@ DEFAULTED_NOTE = (
 
 
 @dataclass(frozen=True, slots=True)
-class ScopeDecision:
-    """Outcome of the ladder above."""
-
-    scope: str | None
-    """Path or glob, or ``None`` meaning the whole repo."""
-
-    mode: ScopeMode
-    notes: list[str]
-    """Caveats to echo to the user, e.g. that whole-repo was defaulted."""
-
-
-@dataclass(frozen=True, slots=True)
 class RootDecision:
-    """Which repo root a job will run against, and how that was decided."""
+    """Which repo root a job runs against, how that was decided, and any caveats."""
 
     root: Path
     mode: RootMode
-    notes: list[str]
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeDecision:
+    """Which code to cover (``None`` means the whole repo) and any caveats."""
+
+    scope: str | None
+    mode: ScopeMode
+    notes: list[str] = field(default_factory=list)
 
 
 def resolve_root(root: str | None, default_root: Path | None = None) -> RootDecision:
     """Decide the repo root, or refuse rather than guess wrong.
 
-    The ladder, highest confidence first:
-
-    1. ``root`` given explicitly -> use it (must exist and be a directory).
-    2. ``default_root`` configured on the server -> use it.
-    3. The process cwd, if it looks like a repo root.
-    4. The nearest ancestor of cwd that looks like a repo root.
-    5. Nothing -> raise.
-
-    Rung 5 is the point of this function. A stdio server inherits its *host's*
-    working directory, so an omitted ``root`` previously meant "explain whatever
-    directory Claude Code or Codex happened to launch from" — which silently
-    produces a video about the wrong codebase. Silently wrong is the worst
-    outcome available here, so an unresolvable root is a hard, immediate error
-    with instructions the calling model can act on.
+    Highest confidence first: explicit ``root`` -> configured ``default_root`` ->
+    the cwd if it looks like a repo -> the nearest enclosing repo -> raise.
 
     Raises:
         RootResolutionError: The explicit/configured path is unusable, or no
             repo root could be inferred from the cwd.
     """
     if root and root.strip():
-        candidate = Path(root.strip()).expanduser()
-        resolved = candidate.resolve()
+        resolved = Path(root.strip()).expanduser().resolve()
         if not resolved.exists():
             raise RootResolutionError(
                 f"root {root!r} does not exist (resolved to {resolved}). "
@@ -111,7 +141,7 @@ def resolve_root(root: str | None, default_root: Path | None = None) -> RootDeci
                 f"{resolved} has no VCS directory or project manifest, so it may not "
                 "be a repository root. Proceeding with it as given."
             )
-        return RootDecision(root=resolved, mode="explicit", notes=notes)
+        return RootDecision(resolved, "explicit", notes)
 
     if default_root is not None:
         resolved = Path(default_root).expanduser().resolve()
@@ -121,34 +151,27 @@ def resolve_root(root: str | None, default_root: Path | None = None) -> RootDeci
                 "CODE_EXPLAIN_VIDEO_DEFAULT_ROOT in this server's MCP configuration."
             )
         logger.info("using configured default_root %s", resolved)
-        return RootDecision(root=resolved, mode="configured", notes=[])
+        return RootDecision(resolved, "configured")
 
     cwd = Path.cwd().resolve()
-    if looks_like_repo(cwd):
-        markers = ", ".join(repo_markers_at(cwd)[:3])
-        logger.info("using cwd %s as root (markers: %s)", cwd, markers)
-        return RootDecision(
-            root=cwd,
-            mode="cwd",
-            notes=[
-                f"No `root` was given, so this server's working directory was used: "
-                f"{cwd} (identified by {markers}). If that is not the repository you "
-                "meant, re-run explain_codebase with an explicit `root`."
-            ],
+    inferred = cwd if looks_like_repo(cwd) else find_repo_root(cwd)
+    if inferred is not None:
+        mode: RootMode = "cwd" if inferred == cwd else "cwd_ancestor"
+        markers = ", ".join(repo_markers_at(inferred)[:3])
+        logger.info("inferred root %s from cwd %s (%s)", inferred, cwd, mode)
+        where = (
+            f"this server's working directory was used: {inferred}"
+            if mode == "cwd"
+            else f"this server's working directory ({cwd}) is not a repository root, "
+            f"so its nearest enclosing one was used: {inferred}"
         )
-
-    ancestor = find_repo_root(cwd)
-    if ancestor is not None:
-        markers = ", ".join(repo_markers_at(ancestor)[:3])
-        logger.info("walked up from %s to repo root %s", cwd, ancestor)
         return RootDecision(
-            root=ancestor,
-            mode="cwd_ancestor",
-            notes=[
-                f"No `root` was given. This server's working directory ({cwd}) is not "
-                f"a repository root, so its nearest enclosing one was used: {ancestor} "
-                f"(identified by {markers}). If that is not the repository you meant, "
-                "re-run explain_codebase with an explicit `root`."
+            inferred,
+            mode,
+            [
+                f"No `root` was given, so {where} (identified by {markers}). If that "
+                "is not the repository you meant, re-run explain_codebase with an "
+                "explicit `root`."
             ],
         )
 
@@ -164,35 +187,41 @@ def resolve_root(root: str | None, default_root: Path | None = None) -> RootDeci
 def supports_elicitation(ctx: "Context | None") -> bool:
     """Report whether this connection can be asked a question.
 
-    Checks negotiated client capabilities rather than assuming; returns ``False``
-    for a missing context so non-MCP callers (tests, CLI) work unchanged.
-
-    The attribute walk is defensive on purpose. The location of the negotiated
-    capabilities has moved between MCP protocol revisions, and guessing wrong
-    must degrade to "cannot ask" rather than raise — a server that crashes
-    because it could not find a capability flag is strictly worse than one that
-    silently falls back to the whole repo.
+    The attribute walk is defensive on purpose: the negotiated capabilities have
+    moved between MCP protocol revisions, and guessing wrong must degrade to
+    "cannot ask" rather than crash the call. ``None`` context (tests, CLI) is
+    likewise just "cannot ask".
     """
-    if ctx is None:
-        return False
     try:
-        session = getattr(ctx, "session", None)
-        params = getattr(session, "client_params", None)
+        params = getattr(getattr(ctx, "session", None), "client_params", None)
         capabilities = getattr(params, "capabilities", None)
-        if capabilities is not None and getattr(capabilities, "elicitation", None) is not None:
-            return True
+        return getattr(capabilities, "elicitation", None) is not None
     except Exception:  # noqa: BLE001 - capability probing must never break a call
         logger.debug("elicitation capability probe raised; treating as unsupported")
         return False
-    return False
+
+
+def default_scope(reason: str) -> ScopeDecision:
+    """The whole-repo fallback, carrying a note the user must be shown."""
+    logger.info("defaulting to whole repo: %s", reason)
+    return ScopeDecision(None, "whole_repo", [DEFAULTED_NOTE])
+
+
+def scope_from_attached_context(ctx: "Context | None") -> ScopeDecision | None:
+    """Ladder rung 3, deliberately a no-op: ``None`` advances to :func:`default_scope`.
+
+    No current MCP revision exposes a host's attached files to a server in a
+    standard way. Inventing a scope from an unstandardised field would silently
+    explain the wrong code — worse than a whole-repo default that says so.
+    """
+    return None
 
 
 async def elicit_scope(ctx: "Context") -> ScopeDecision:
-    """Ask the user whether to cover the whole repo or a specific path.
+    """Ask the user for a path or glob, falling back on any non-answer.
 
-    Handles all three elicitation outcomes — accept, decline, cancel — by
-    falling back to :func:`default_scope` for decline and cancel rather than
-    raising, so a user dismissing the prompt still gets a video.
+    Decline, cancel, and an outright client error all land on
+    :func:`default_scope`, so dismissing the prompt still yields a video.
     """
     try:
         result = await ctx.elicit(
@@ -211,31 +240,10 @@ async def elicit_scope(ctx: "Context") -> ScopeDecision:
 
     answer = str(getattr(result, "data", "") or "").strip()
     if not answer or answer.lower() == WHOLE_REPO_CHOICE.lower():
-        return ScopeDecision(scope=None, mode="whole_repo", notes=["You chose the whole repository."])
+        return ScopeDecision(None, "whole_repo", ["You chose the whole repository."])
 
     logger.info("elicited scope: %s", answer)
-    return ScopeDecision(scope=answer, mode="explicit", notes=[])
-
-
-def scope_from_attached_context(ctx: "Context | None") -> ScopeDecision | None:
-    """Derive scope from whatever the host attached to the conversation.
-
-    Returns ``None`` when nothing usable is attached, which advances the ladder
-    to :func:`default_scope`.
-
-    No host in the current MCP revisions exposes its attached files to a server
-    in a standard way, so this rung is a documented no-op rather than a guess:
-    inventing a scope from an unstandardised field would silently explain the
-    wrong code, which is worse than falling through to a whole-repo default that
-    announces itself.
-    """
-    return None
-
-
-def default_scope(reason: str) -> ScopeDecision:
-    """Return the whole-repo fallback with an explicit user-facing note."""
-    logger.info("defaulting to whole repo: %s", reason)
-    return ScopeDecision(scope=None, mode="whole_repo", notes=[DEFAULTED_NOTE])
+    return ScopeDecision(answer, "explicit")
 
 
 async def resolve_requested_scope(
@@ -244,9 +252,9 @@ async def resolve_requested_scope(
     *,
     allow_elicitation: bool = True,
 ) -> ScopeDecision:
-    """Run the full ladder and return the decision. Never raises for a missing scope."""
+    """Run the scope ladder. Never raises for a missing scope."""
     if scope and scope.strip():
-        return ScopeDecision(scope=scope.strip(), mode="explicit", notes=[])
+        return ScopeDecision(scope.strip(), "explicit")
 
     if allow_elicitation and ctx is not None and supports_elicitation(ctx):
         return await elicit_scope(ctx)
@@ -255,9 +263,6 @@ async def resolve_requested_scope(
     if attached is not None:
         return attached
 
-    reason = (
-        "elicitation is disabled by configuration"
-        if not allow_elicitation
-        else "this client does not support elicitation"
-    )
-    return default_scope(reason)
+    if allow_elicitation:
+        return default_scope("this client does not support elicitation")
+    return default_scope("elicitation is disabled by configuration")

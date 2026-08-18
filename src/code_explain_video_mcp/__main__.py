@@ -1,25 +1,32 @@
 """Console entrypoint: ``python -m code_explain_video_mcp`` / the installed script.
 
 This exists alongside ``fastmcp.json`` on purpose. ``fastmcp run`` is the
-preferred path (it owns the environment and transport declaratively), but hosts
+preferred path — it owns the environment and transport declaratively — but hosts
 that only know how to spawn a command need a plain executable, and that is what
-this module provides.
-
-Neither path should contain logic: both converge on
-``server.create_server(load_settings(...))``.
+this module provides. Neither path holds logic: both converge on
+``server.run(load_settings(...))``.
 """
 
 from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
+from code_explain_video_mcp.config import load_settings
+from code_explain_video_mcp.logging_conf import configure_logging
+from code_explain_video_mcp.server import run
 
-def build_arg_parser() -> argparse.ArgumentParser:
-    """Define CLI flags: ``--transport``, ``--host``, ``--port``, ``--config``.
+# CLI flags that override a settings field of the same name.
+OVERRIDABLE = ("transport", "host", "port", "dry_run")
 
-    Flags override values from the config file, matching the precedence in
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Parse args, build the server, and block on the chosen transport.
+
+    Flags outrank the config file and the ``CODE_EXPLAIN_VIDEO_*`` env vars,
+    extending the precedence ladder in
     :func:`code_explain_video_mcp.config.load_settings`.
     """
     parser = argparse.ArgumentParser(
@@ -38,9 +45,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--host", default=None, help="Bind address for http/sse (not a URL).")
     parser.add_argument("--port", type=int, default=None, help="Port for http/sse.")
-    parser.add_argument(
-        "--config", type=Path, default=None, help="Path to a TOML settings file."
-    )
+    parser.add_argument("--config", type=Path, default=None, help="Path to a TOML settings file.")
     parser.add_argument(
         "--dry-run",
         dest="dry_run",
@@ -54,35 +59,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
         default="INFO",
     )
-    return parser
+    args = parser.parse_args(argv)
 
-
-def main(argv: Sequence[str] | None = None) -> int:
-    """Parse args, build the server, and block on the chosen transport."""
-    from dataclasses import replace
-
-    from code_explain_video_mcp.config import load_settings
-    from code_explain_video_mcp.logging_conf import configure_logging
-    from code_explain_video_mcp.server import run
-
-    args = build_arg_parser().parse_args(argv)
     configure_logging(args.log_level, stdio_safe=True)
 
     settings = load_settings(args.config)
-    overrides: dict[str, object] = {}
-    if args.transport is not None:
-        overrides["transport"] = args.transport
-    if args.host is not None:
-        overrides["host"] = args.host
-    if args.port is not None:
-        overrides["port"] = args.port
-    if args.dry_run is not None:
-        overrides["dry_run"] = args.dry_run
-    if overrides:
-        settings = replace(settings, **overrides)
+    overrides = {
+        name: value for name in OVERRIDABLE if (value := getattr(args, name)) is not None
+    }
 
     try:
-        run(settings)
+        run(replace(settings, **overrides))
     except KeyboardInterrupt:  # pragma: no cover - interactive
         return 130
     return 0

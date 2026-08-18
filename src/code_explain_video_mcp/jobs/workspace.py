@@ -18,13 +18,6 @@ from code_explain_video_mcp.logging_conf import get_logger
 
 logger = get_logger("jobs.workspace")
 
-PROJECT_SUBDIR = "project"
-"""Where the Remotion scaffold copy lives inside a workspace."""
-
-OUTPUT_SUBDIR = "out"
-"""Where render artifacts land inside a workspace before being published."""
-
-
 @dataclass(frozen=True, slots=True)
 class Workspace:
     """One job's directory, with the well-known paths inside it named."""
@@ -34,13 +27,13 @@ class Workspace:
 
     @property
     def project_dir(self) -> Path:
-        """The Remotion project copy that gets type-checked and rendered."""
-        return self.root / PROJECT_SUBDIR
+        """The Remotion scaffold copy that gets type-checked and rendered."""
+        return self.root / "project"
 
     @property
     def output_dir(self) -> Path:
-        """Per-job render output directory."""
-        return self.root / OUTPUT_SUBDIR
+        """Where render artifacts land before being published."""
+        return self.root / "out"
 
     @property
     def storyboard_path(self) -> Path:
@@ -71,10 +64,6 @@ class WorkspaceManager:
         workspace.output_dir.mkdir(parents=True, exist_ok=True)
         logger.debug("workspace at %s", workspace.root, extra={"job_id": job_id})
         return workspace
-
-    def destroy(self, job_id: str) -> None:
-        """Delete one job's workspace, ignoring an already-missing directory."""
-        shutil.rmtree(self.root / job_id, ignore_errors=True)
 
     def reap(self, ttl_seconds: float, *, keep: set[str] | None = None) -> list[str]:
         """Delete workspaces whose mtime is older than ``ttl_seconds``.

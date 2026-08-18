@@ -2,13 +2,13 @@
 
 This package backs pipeline stages 1 and 2 and is the reason "whole repo" does
 not blow the context window. It contains no MCP and no LangGraph imports — it is
-plain library code over a filesystem, unit-testable against the sample repos in
-``tests/fixtures/sample_repos``.
+plain library code over a filesystem.
 
-* ``scope``     -- walk, prune noise, rank, and cap files.
-* ``search``    -- ripgrep wrapper for finding relevant regions.
-* ``chunking``  -- pull functions/classes rather than dumping whole files, and
-                   enforce the token budget.
+* ``scope``     -- walk, prune noise, rank, and cap files. The only stage that
+                   is fully implemented today.
+* ``search``    -- ripgrep wrapper for finding relevant regions (placeholder).
+* ``chunking``  -- pull functions/classes rather than whole files, and enforce
+                   the token budget (placeholder).
 """
 
 from __future__ import annotations

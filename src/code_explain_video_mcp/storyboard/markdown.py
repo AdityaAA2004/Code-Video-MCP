@@ -10,7 +10,7 @@ from __future__ import annotations
 from code_explain_video_mcp.storyboard.schema import Scene, Storyboard
 
 
-def render_markdown(storyboard: Storyboard, *, include_code: bool = True) -> str:
+def render_markdown(storyboard: Storyboard) -> str:
     """Render the full storyboard as Markdown (title, then one section per scene)."""
     lines: list[str] = [f"# {storyboard.title}", ""]
 
@@ -26,13 +26,12 @@ def render_markdown(storyboard: Storyboard, *, include_code: bool = True) -> str
     ]
 
     for index, scene in enumerate(storyboard.scenes, start=1):
-        lines.append(render_scene(scene, index, include_code=include_code))
-        lines.append("")
+        lines += [render_scene(scene, index), ""]
 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_scene(scene: Scene, index: int, *, include_code: bool = True) -> str:
+def render_scene(scene: Scene, index: int) -> str:
     """Render a single scene: heading, timing, bullets, snippet, goal tie-in."""
     lines: list[str] = [
         f"## {index}. {scene.title}",
@@ -45,8 +44,8 @@ def render_scene(scene: Scene, index: int, *, include_code: bool = True) -> str:
         lines += [f"- {bullet}" for bullet in scene.bullets]
         lines.append("")
 
-    if scene.snippet is not None and include_code:
-        snippet = scene.snippet
+    snippet = scene.snippet
+    if snippet is not None:
         lines += [
             f"**{snippet.path}** (lines {snippet.start_line}–{snippet.end_line})",
             "",
@@ -56,26 +55,20 @@ def render_scene(scene: Scene, index: int, *, include_code: bool = True) -> str:
             "",
         ]
         if snippet.highlight_lines:
-            highlighted = ", ".join(str(n) for n in snippet.highlight_lines)
-            lines += [f"Highlighted: lines {highlighted}", ""]
+            lines += [
+                f"Highlighted: lines {', '.join(str(n) for n in snippet.highlight_lines)}",
+                "",
+            ]
         if snippet.caption:
             lines += [f"_{snippet.caption}_", ""]
-    elif scene.snippet is not None:
-        snippet = scene.snippet
-        lines += [
-            f"**{snippet.path}** (lines {snippet.start_line}–{snippet.end_line}) — code omitted",
-            "",
-        ]
 
-    lines += [f"**Narration:** {scene.narration}", ""]
-    lines += [f"**Ties to goal:** {scene.goal_tie_in}"]
+    lines += [f"**Narration:** {scene.narration}", "", f"**Ties to goal:** {scene.goal_tie_in}"]
     return "\n".join(lines)
 
 
 def render_summary_line(storyboard: Storyboard) -> str:
     """One-line digest (scene count, total runtime) for status responses."""
-    total = storyboard.total_duration_seconds
-    minutes, seconds = divmod(int(round(total)), 60)
+    minutes, seconds = divmod(round(storyboard.total_duration_seconds), 60)
     runtime = f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
     return (
         f"{len(storyboard.scenes)} scenes · {runtime} · "

@@ -1,10 +1,10 @@
 """Guarding the storyboard before it reaches codegen.
 
-Schema conformance alone is not enough: a model can emit a perfectly typed
-``CodeSnippet`` whose line numbers or code text do not match the real file. Since
-the video's whole value is that it shows the user's actual code, snippet refs
-are checked against disk here and mismatches are treated as a stage-3 failure
-(retried at the LLM level) rather than being passed downstream.
+Schema conformance is not enough: a model can emit a perfectly typed
+``CodeSnippet`` whose line numbers or text do not match the real file. The
+video's whole value is that it shows the user's actual code, so snippet refs are
+checked against disk here and mismatches are a stage-3 failure (retried at the
+LLM level) rather than something passed downstream.
 """
 
 from __future__ import annotations

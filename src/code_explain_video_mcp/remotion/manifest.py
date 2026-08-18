@@ -6,11 +6,13 @@
 The scaffold directory ships with the package and is copied per job. Only the
 files declared as *slots* are ever overwritten; everything else — components,
 composition shell, tsconfig, package.json — is fixed. That invariant is what
-makes generation reliable, and it is enforced here rather than trusted to the
+makes generation reliable, and it is enforced in code rather than trusted to the
 prompt.
 
 ``ScaffoldManifest`` is also the source of the slot documentation embedded in
 the codegen prompt, so the prompt and the enforcement cannot drift apart.
+
+Not implemented: ``scaffold/`` is still an empty directory tree.
 """
 
 from __future__ import annotations
@@ -49,11 +51,6 @@ class ScaffoldManifest:
     node_modules_present: bool
 
 
-def scaffold_source_dir() -> Path:
-    """Absolute path to the checked-in scaffold shipped inside the package."""
-    raise NotImplementedError
-
-
 def load_manifest(scaffold_root: Path) -> ScaffoldManifest:
     """Read ``scaffold.manifest.json`` and the component type declarations."""
     raise NotImplementedError
@@ -64,23 +61,5 @@ def materialize_scaffold(scaffold_root: Path, workspace: Path) -> Path:
 
     ``node_modules`` is linked or shared rather than copied — a per-job npm
     install would dominate the runtime of every render.
-    """
-    raise NotImplementedError
-
-
-def ensure_dependencies_installed(project_root: Path, package_manager: str) -> None:
-    """Install JS dependencies once if the shared ``node_modules`` is missing.
-
-    Raises:
-        ExternalToolError: Node or the package manager is unavailable.
-    """
-    raise NotImplementedError
-
-
-def assert_only_slots_written(project_root: Path, manifest: ScaffoldManifest) -> None:
-    """Verify no non-slot scaffold file was modified.
-
-    Raises:
-        CodeGenerationError: A fixed scaffold file was overwritten.
     """
     raise NotImplementedError

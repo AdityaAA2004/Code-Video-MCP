@@ -13,9 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from code_explain_video_mcp.context.scope import find_repo_root, looks_like_repo
 from code_explain_video_mcp.errors import RootResolutionError
-from code_explain_video_mcp.tools.elicitation import resolve_root
+from code_explain_video_mcp.tools.elicitation import (
+    find_repo_root,
+    looks_like_repo,
+    resolve_root,
+)
 
 
 @pytest.fixture

@@ -1,13 +1,17 @@
 """Async job handling: the bridge between a fast tool call and a long pipeline.
 
 ``explain_codebase`` must return a ``job_id`` in milliseconds while the work it
-started runs for minutes. That requires three cooperating pieces:
+started runs for minutes. Four cooperating pieces make that work:
 
 * ``models``    -- the job record and the canonical stage vocabulary.
 * ``store``     -- lock-guarded shared state; snapshots for readers.
 * ``workspace`` -- a directory per job for the scaffold copy, logs, and output.
 * ``runner``    -- one asyncio task per job, and the guarantee that every one of
                    them ends in a terminal status.
+
+Jobs are held in memory only: a restart kills the background tasks driving them,
+so persisting records without persisting progress would just hand the host stale
+``running`` jobs that never advance.
 
 This package knows nothing about MCP. It does import ``graph`` (the runner has
 to invoke the pipeline), so the dependency direction is jobs -> graph, never the
